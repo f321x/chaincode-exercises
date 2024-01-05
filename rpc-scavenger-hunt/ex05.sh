@@ -5,10 +5,10 @@
 
 XPUB=xpub6Cx5tvq6nACSLJdra1A6WjqTo1SgeUZRFqsX5ysEtVBMwhCCRa4kfgFqaT2o1kwL3esB1PsYr3CUdfRZYfLHJunNWUABKftK2NjHUtzDms2
 
-DESCRIPTOR=$(bitcoin-cli getdescriptorinfo "tr($XPUB/0/*)" | jq -r '.descriptor')
+DESCRIPTOR=$(bitcoin-cli getdescriptorinfo "tr($XPUB/*)" | jq -r '.descriptor')
 
 # echo $DESCRIPTOR
 
-ADDRESS=$(bitcoin-cli deriveaddresses "$DESCRIPTOR" "[99,99]")
+ADDRESS=$(bitcoin-cli deriveaddresses "$DESCRIPTOR" "[100,100]")
 
 echo $ADDRESS | jq -r '.[0]'
