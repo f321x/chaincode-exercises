@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "name": "Setup",
+      "setup": "",
+      "run": "bash ./test/setup.sh",
+      "input": "",
+      "output": "",
+      "comparison": "exact",
+      "timeout": 10,
+      "points": null
+    },
+    {
+      "name": "Check wallet balance",
+      "setup": "",
+      "run": "bash ./test/test_balance.sh",
+      "input": "",
+      "output": "^(?:.*\\n)*PASS$",
+      "comparison": "regex",
+      "timeout": 10,
+      "points": 1
+    },
+    {
+      "name": "Spend from p2wpkh and p2wsh",
+      "setup": "",
+      "run": "bash ./test/test_spend.sh",
+      "input": "",
+      "output": "",
+      "comparison": "exact",
+      "timeout": 10,
+      "points": 1
+    }
+  ]
+}
