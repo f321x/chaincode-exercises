@@ -102,7 +102,7 @@ def get_wallet_privs(key: bytes, chaincode: bytes, path: List[Tuple[int, bool]])
         chaincode = child["chaincode"]
     index = int(path[-1][0])
     hardened = path[-1][1]
-    while len(privs) < 2000:
+    while len(privs) < 2001:
         child = derive_priv_child(key, chaincode, index, hardened)
         privs.append(child["key"])
         index += 1
@@ -215,7 +215,7 @@ def recover_wallet_state(xprv: str):
 
     height = 310
     for h in range(height + 1):
-        txs = json.loads(bcli(f"getblock {bcli(f'getblockhash {h}')} 2"))["tx"]
+        txs = json.loads(bcli(f"getblock {bcli(f'getblockhash {h}')} 2"), parse_float=Decimal)["tx"]
         # Scan every tx in every block
         for tx in txs:
             # # Check every tx output for our own witness programs.
@@ -241,12 +241,13 @@ def recover_wallet_state(xprv: str):
             # Remove this coin from our wallet state utxo pool
             # so we don't double spend it later
             # Add to our total balance
-            for txid, out in state["utxo"].items():
-                state["balance"] += out[1]
+    for txid, out in state["utxo"].items():
+        state["balance"] += out[1]
     state["balance"] = state["balance"] / 100000000.0
     # print(state["balance"])
     return state
 
-
+# bitcoin-cli scantxoutset "start" '["wpkh(tprv8ZgxMBicQKsPf4ey4o4mdpUh3AYy7JA5vySudZ8boXjFhYYjJ9TrP5FPiqhiAh8jPcPi4zMJ2FkdPgnzXDogMy8uoEAWDBVDrRAzyz8J7Dz/84h/1h/0h/0/*)#2d6m058e"]'
+#   "total_amount": 16.01713376 probably?
 if __name__ == "__main__":
     print(f"{WALLET_NAME} {recover_wallet_state(EXTENDED_PRIVATE_KEY)['balance']}")
