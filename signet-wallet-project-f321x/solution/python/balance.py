@@ -7,7 +7,7 @@ import hmac
 import json
 
 # Provided by administrator
-WALLET_NAME = "wallet_007"
+WALLET_NAME = "wallet_107"
 DESCRIPTOR="wpkh(tprv8ZgxMBicQKsPf4ey4o4mdpUh3AYy7JA5vySudZ8boXjFhYYjJ9TrP5FPiqhiAh8jPcPi4zMJ2FkdPgnzXDogMy8uoEAWDBVDrRAzyz8J7Dz/84h/1h/0h/0/*)#2d6m058e"
 EXTENDED_PRIVATE_KEY = "tprv8ZgxMBicQKsPf4ey4o4mdpUh3AYy7JA5vySudZ8boXjFhYYjJ9TrP5FPiqhiAh8jPcPi4zMJ2FkdPgnzXDogMy8uoEAWDBVDrRAzyz8J7Dz"
 
