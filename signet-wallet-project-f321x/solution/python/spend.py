@@ -1,4 +1,6 @@
 import hashlib
+import pickle # for state cache
+import os # for state cache
 from ecdsa import SigningKey, SECP256k1, util
 from typing import List
 from balance import (
@@ -8,6 +10,18 @@ from balance import (
     get_p2wpkh_program,
     recover_wallet_state)
 
+
+STATE_FILE = "state.pkl"
+
+if os.path.exists(STATE_FILE):
+    # Load the state from the file
+    with open(STATE_FILE, "rb") as f:
+        state = pickle.load(f)
+else:
+    # Get the state and save it to the file
+    state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
+    with open(STATE_FILE, "wb") as f:
+        pickle.dump(state, f)
 
 # Given 2 compressed public keys as byte arrays, construct
 # a 2-of-2 multisig output script. No length byte prefix is necessary.
@@ -38,25 +52,24 @@ def input_from_utxo(txid: bytes, index: int) -> bytes:
     reversed_txid = txid[::-1]
     # Index of the output being spent (zero-indexed)
     index = index.to_bytes(4, "little")
+    outpoint = reversed_txid + index
     # ScriptSig (empty)
-    scriptsig = bytes.fromhex("00")
+    scriptsig_len = bytes.fromhex("00")
     # Sequence (default)
     sequence = bytes.fromhex("ffffffff")
     # Return the full input
-    return reversed_txid + index + scriptsig + sequence
+    return outpoint, reversed_txid + index + scriptsig_len + sequence
 
 # Given an output script and value (in satoshis), return a serialized transaction output
 def output_from_options(script: bytes, value: int) -> bytes:
     value = value.to_bytes(8, "little")
-    script_length = len(script)
-    pk_script_length = script_length.to_bytes((script_length.bit_length() + 7) // 8, "little")
-    return value + pk_script_length + script
+    script_length = len(script).to_bytes(1, "little")
+    return value + script_length + script
 
 # Given a JSON utxo object, extract the public key hash from the output script
 # and assemble the p2wpkh scriptcode as defined in BIP143
 # <script length> OP_DUP OP_HASH160 <pubkey hash> OP_EQUALVERIFY OP_CHECKSIG
 # https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki#specification
-
 def get_p2wpkh_scriptcode(utxo: object) -> bytes:
     asm = utxo["scriptPubKey"]["asm"]
     # Split the script into tokens
@@ -90,20 +103,28 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     result = b""
     # Version
     result += (2).to_bytes(4, "little")
+
     # All TX input outpoints (only one in our case)
-    result += dsha256(outpoint)
+    result += dsha256(outpoint)  # hashPrevouts
     # All TX input sequences (only one for us, always default value)
     result += dsha256(bytes.fromhex("ffffffff"))
     # Single outpoint being spent (32-byte hash + 4-byte little endian)
     result += outpoint
+
     # Scriptcode (the scriptPubKey in/implied by the output being spent, see BIP 143) (serialized as scripts inside CTxOuts)
+    # Passed scriptcode: scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
     result += scriptcode
+
     # Value of output being spent (8-byte little endian)
     result += value.to_bytes(8, "little")
     # Sequence of output being spent (always default for us) (4-byte little endian)
     result += bytes.fromhex("ffffffff")
     # All TX outputs (4-byte little endian)
+    # hashOutputs is the double SHA256
+    # of the serialization of all output amount (8-byte little endian)
+    # with scriptPubKey (serialized as scripts inside CTxOuts)
     result += dsha256(b"".join(outputs))
+
     # Locktime (always default for us) (4-byte little endian)
     result += bytes.fromhex("00000000")
     # SIGHASH_ALL (always default for us) (4-byte little endian)
@@ -136,16 +157,16 @@ def sign(priv: bytes, msg: bytes) -> bytes:
     # Sign the message digest
     sig = sk.sign_digest(msg, sigencode=util.sigencode_der_canonize)
     # Append the SIGHASH_ALL byte
-    sig += bytes.fromhex("01")
     # Decode the DER-encoded signature
-    der = util.sigdecode_der(sig, sk.pubkey.pubcurve)
+    # vk = sk.get_verifying_key()
+    r, s = util.sigdecode_der(sig, SECP256k1.order)
     # Extract the s value
-    s = der[32:]
     # If the s value is too high, negate it
-    if int.from_bytes(s, "big") > SECP256k1.order // 2:
-        s = (SECP256k1.order - int.from_bytes(s, "big")).to_bytes(32, "big")
+    if s > SECP256k1.order // 2:
+        s = SECP256k1.order - s
     # Re-encode the signature
-    sig = util.sigencode_der(der[:32] + s, sk.pubkey.pubcurve)
+    sig = util.sigencode_der(r, s, SECP256k1.order)
+    sig += bytes.fromhex("01")
     return sig
     # Keep signing until we produce a signature with "low s value"
     # We will have to decode the DER-encoded signature and extract the s value to check it
@@ -190,21 +211,24 @@ def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
 # https://en.bitcoin.it/wiki/Protocol_documentation#tx
 def assemble_transaction(inputs: List[bytes], outputs: List[bytes], witnesses: List[bytes]) -> str:
     version = (2).to_bytes(4, "little")
+    marker = bytes.fromhex("00")
     flags = bytes.fromhex("0001")
     locktime = bytes.fromhex("00000000")
     tx = b""
-    tx += version + flags + len(inputs).to_bytes(1, "little")
+    tx += version + marker + flags + len(inputs).to_bytes(1, "little")
+
     for input in inputs:
         tx += input
+
     tx += len(outputs).to_bytes(1, "little")
     for output in outputs:
         tx += output
+
     for witness in witnesses:
         tx += witness
+
     tx += locktime
     return tx.hex()
-
-
 
 # Given arrays of inputs and outputs (no witnesses!) compute the txid.
 # Return the 32 byte txid as a *reversed* hex-encoded string.
@@ -212,63 +236,95 @@ def assemble_transaction(inputs: List[bytes], outputs: List[bytes], witnesses: L
 def get_txid(inputs: List[bytes], outputs: List[bytes]) -> str:
     version = (2).to_bytes(4, "little")
     locktime = bytes.fromhex("00000000")
+    tx = b""
+    tx += version + len(inputs).to_bytes(1, "little")
+    for input in inputs:
+        tx += input
+    tx += len(outputs).to_bytes(1, "little")
+    for output in outputs:
+        tx += output
+    tx += locktime
+    return hashlib.new("sha256", hashlib.new("sha256", tx).digest()).digest()[::-1].hex()
 
 
 # Spend a p2wpkh utxo to a 2 of 2 multisig p2wsh and return the txid
 def spend_p2wpkh(state: object) -> str:
     FEE = 1000
     AMT = 1000000
+    input = {}
+    index = 0
     # Choose an unspent coin worth more than 0.01 BTC
+    for txid, utxo in state["utxo"].items():  # maybe need to check if utxo even is a p2wpkh
+        if utxo[1] > AMT + FEE:
+            input['txid'] = txid  # txid
+            input['op_index'] = utxo[0]  # outpoint index
+            input['value_sats'] = utxo[1]  # value in satoshis
+            input['utxo_obj'] = utxo[2]   # utxo object
+            input['priv_key_index'] = index
+            break
+        index += 1
 
     # Create the input from the utxo
     # Reverse the txid hash so it's little-endian
+    op, serialized_input = input_from_utxo(bytes.fromhex(input['txid']), input["op_index"])
 
     # Compute destination output script and output
+    pubkeys = [bytes.fromhex(state["pubs"][0]), bytes.fromhex(state["pubs"][1])]
+    musig_script = create_multisig_script(pubkeys)
+    output_musig = output_from_options(musig_script, AMT)
 
     # Compute change output script and output
+    change_script = get_p2wpkh_program(bytes.fromhex(state["pubs"][0]))
+    change_output = output_from_options(change_script, input["value_sats"] - AMT - FEE)
 
     # Get the message to sign
+    scriptcode = get_p2wpkh_scriptcode(input["utxo_obj"])
+    msg = get_commitment_hash(op, scriptcode, input["value_sats"], [output_musig, output_from_options(change_script, input["value_sats"] - AMT - FEE)])
 
     # Fetch the private key we need to sign with
-
+    priv = state["privs"][input["priv_key_index"]]
     # Sign!
+    witness = get_p2wpkh_witness(priv, msg)
 
     # Assemble
+    final = assemble_transaction([serialized_input], [output_musig, change_output], [witness])
 
     # Reserialize without witness data and double-SHA256 to get the txid
-
+    txid = get_txid([serialized_input], [output_musig, change_output])
     # For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
-
     return txid, final
 
 
+# state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
+print(spend_p2wpkh(state))
+
 # Spend a 2-of-2 multisig p2wsh utxo and return the txid
-def spend_p2wsh(state: object, txid: str) -> str:
-    COIN_VALUE = 1000000
-    FEE = 1000
-    AMT = 0
-    # Create the input from the utxo
-    # Reverse the txid hash so it's little-endian
+# def spend_p2wsh(state: object, txid: str) -> str:
+#     COIN_VALUE = 1000000
+#     FEE = 1000
+#     AMT = 0
+#     # Create the input from the utxo
+#     # Reverse the txid hash so it's little-endian
 
-    # Compute destination output script and output
+#     # Compute destination output script and output
 
-    # Compute change output script and output
+#     # Compute change output script and output
 
-    # Get the message to sign
+#     # Get the message to sign
 
-    # Sign!
+#     # Sign!
 
-    # Assemble
+#     # Assemble
 
-    # For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
-    return finalhex
+#     # For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
+#     return finalhex
 
 
 # https://mempool.btcfoss.bitherding.com/
-if __name__ == "__main__":
-    # Recover wallet state: We will need all key pairs and unspent coins
-    state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
-    txid1, tx1 = spend_p2wpkh(state)
-    print(tx1)
-    tx2 = spend_p2wsh(state, txid1)
-    print(tx2)
+# if __name__ == "__main__":
+#     # Recover wallet state: We will need all key pairs and unspent coins
+#     state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
+#     txid1, tx1 = spend_p2wpkh(state)
+#     print(tx1)
+#     tx2 = spend_p2wsh(state, txid1)
+#     print(tx2)

@@ -226,7 +226,7 @@ def recover_wallet_state(xprv: str):
                 if scPubKeyHex != None and scPubKeyHex in programs_hex:
                     # state["balance"] += out["value"]
                     value_satoshis = int(out["value"] * 100000000)
-                    state["utxo"][tx["txid"]] = [out["n"], value_satoshis]
+                    state["utxo"][tx["txid"]] = [out["n"], value_satoshis, out]
 
             # # Check every tx input (witness) for our own compressed public keys.
             # # These are coins we have spent.
@@ -245,6 +245,8 @@ def recover_wallet_state(xprv: str):
         state["balance"] += out[1]
     state["balance"] = state["balance"] / 100000000.0
     # print(state["balance"])
+    # for txid, out in state["utxo"].items():
+    #     print(f"{out[2]}")
     return state
 
 # bitcoin-cli scantxoutset "start" '["wpkh(tprv8ZgxMBicQKsPf4ey4o4mdpUh3AYy7JA5vySudZ8boXjFhYYjJ9TrP5FPiqhiAh8jPcPi4zMJ2FkdPgnzXDogMy8uoEAWDBVDrRAzyz8J7Dz/84h/1h/0h/0/*)#2d6m058e"]'
