@@ -48,6 +48,8 @@ def get_p2wsh_program(script: bytes, version: int=0) -> bytes:
 # Given an outpoint, return a serialized transaction input spending it
 # Use hard-coded defaults for sequence and scriptSig
 def input_from_utxo(txid: bytes, index: int) -> bytes:
+    # TODO: txinwitness ??, scriptsig itself bytes?
+
     # Reverse the txid hash so it's little-endian
     reversed_txid = txid[::-1]
     # Index of the output being spent (zero-indexed)
@@ -75,6 +77,8 @@ def get_p2wpkh_scriptcode(utxo: object) -> bytes:
     # Split the script into tokens
     tokens = asm.split(" ")
     # The last token is the pubkey hash
+    print(utxo)
+    print(tokens[-1], "tokens[-1]")
     pubkey_hash = bytes.fromhex(tokens[-1])
     # Assemble the scriptcode
     scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
@@ -104,6 +108,12 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     # Version
     result += (2).to_bytes(4, "little")
 
+# https://discord.com/channels/1188115495346507797/1198656875961532416/1202045448164999258
+    # printf "302e0201010420 <privkey_hex> a00706052b8104000a" | xxd -p -r > priv.hex
+# openssl ec -inform d < priv.hex > priv.pem
+# printf <hex_msg> | xxd -p -r | sha256sum | xxd -p -r | sha256sum | xxd -p -r > msg
+# openssl pkeyutl -inkey priv.pem -sign -in msg -pkeyopt digest:sha256 | xxd -p -c256
+
     # All TX input outpoints (only one in our case)
     result += dsha256(outpoint)  # hashPrevouts
     # All TX input sequences (only one for us, always default value)
@@ -111,8 +121,10 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     # Single outpoint being spent (32-byte hash + 4-byte little endian)
     result += outpoint
 
+    # length prefix see hint
     # Scriptcode (the scriptPubKey in/implied by the output being spent, see BIP 143) (serialized as scripts inside CTxOuts)
     # Passed scriptcode: scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
+    # The scriptcode in the transaction commitment must be prefixed with a length byte, but the witness program only commits to the raw script with no length byte
     result += scriptcode
 
     # Value of output being spent (8-byte little endian)
@@ -123,6 +135,7 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     # hashOutputs is the double SHA256
     # of the serialization of all output amount (8-byte little endian)
     # with scriptPubKey (serialized as scripts inside CTxOuts)
+    # https://discord.com/channels/1188115495346507797/1198656875961532416/1200194030533869659
     result += dsha256(b"".join(outputs))
 
     # Locktime (always default for us) (4-byte little endian)
@@ -173,17 +186,21 @@ def sign(priv: bytes, msg: bytes) -> bytes:
     # Format: 0x30 [total-length] 0x02 [R-length] [R] 0x02 [S-length] [S] [sighash]
 
 
-# Given a private key and transaction commitment hash to sign,
-# compute the signature and assemble the serialized p2pkh witness
+# Given a private key and  p2transaction commitment hash to sign,
+# compute the signature and assemble the serializedpkh witness
 # as defined in BIP 141 (2 stack items: signature, compressed public key)
 # https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#specification
 def get_p2wpkh_witness(priv: bytes, msg: bytes) -> bytes:
     # Get the compressed public key
     pub = get_pub_from_priv(priv)
     # Compute the signature
+    # print(msg.hex())
     sig = sign(priv, msg)
     # Assemble the witness
-    witness = bytes.fromhex("00") + sig + pub
+    # sig = bytes.fromhex("30450220262ec2cba36ea6a940b23ead534deb7064b90814ada5b504900770a17066efe80221009843eb31700b3f5e055799e6b75266c6327a557815bb41075b6c43e7461b7e16")
+    # witness = bytes.fromhex("00") +
+    # witness = sig + pub
+    witness = bytes.fromhex("02") + len(sig).to_bytes(1, "little") + sig + len(pub).to_bytes(1, "little") + pub
     return witness
 
 # Given two private keys and a transaction commitment hash to sign,
@@ -212,18 +229,20 @@ def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
 def assemble_transaction(inputs: List[bytes], outputs: List[bytes], witnesses: List[bytes]) -> str:
     version = (2).to_bytes(4, "little")
     marker = bytes.fromhex("00")
-    flags = bytes.fromhex("0001")
+    flag = bytes.fromhex("01")
     locktime = bytes.fromhex("00000000")
     tx = b""
-    tx += version + marker + flags + len(inputs).to_bytes(1, "little")
-
+    tx += version + marker + flag + len(inputs).to_bytes(1, "little")
     for input in inputs:
         tx += input
+        # tx += len(witnesses[0]).to_bytes(1, "little") + witnesses[0]
 
     tx += len(outputs).to_bytes(1, "little")
     for output in outputs:
         tx += output
 
+    # for witness in witnesses: this cost me two days :D
+    #     tx += witness
     for witness in witnesses:
         tx += witness
 
@@ -247,6 +266,14 @@ def get_txid(inputs: List[bytes], outputs: List[bytes]) -> str:
     return hashlib.new("sha256", hashlib.new("sha256", tx).digest()).digest()[::-1].hex()
 
 
+def get_correct_priv_key(all_privs: List[bytes], witness_prog: str) -> bytes:
+    for priv in all_privs:
+        pub = get_pub_from_priv(priv)
+        # print(f"witness: {get_p2wpkh_program(pub).hex()} | given: {witness_prog}")
+        if witness_prog == get_p2wpkh_program(pub).hex():
+            # print("priv found")
+            return priv
+
 # Spend a p2wpkh utxo to a 2 of 2 multisig p2wsh and return the txid
 def spend_p2wpkh(state: object) -> str:
     FEE = 1000
@@ -254,15 +281,19 @@ def spend_p2wpkh(state: object) -> str:
     input = {}
     index = 0
     # Choose an unspent coin worth more than 0.01 BTC
-    for txid, utxo in state["utxo"].items():  # maybe need to check if utxo even is a p2wpkh
+
+    for txid, utxo in state["utxo"].items():
         if utxo[1] > AMT + FEE:
             input['txid'] = txid  # txid
             input['op_index'] = utxo[0]  # outpoint index
             input['value_sats'] = utxo[1]  # value in satoshis
             input['utxo_obj'] = utxo[2]   # utxo object
-            input['priv_key_index'] = index
+            input['priv_key'] = get_correct_priv_key(state["privs"], utxo[2]["scriptPubKey"]["hex"])
             break
         index += 1
+    if (not input["priv_key"]):
+        print("no key found")
+        return
 
     # Create the input from the utxo
     # Reverse the txid hash so it's little-endian
@@ -281,10 +312,10 @@ def spend_p2wpkh(state: object) -> str:
     scriptcode = get_p2wpkh_scriptcode(input["utxo_obj"])
     msg = get_commitment_hash(op, scriptcode, input["value_sats"], [output_musig, output_from_options(change_script, input["value_sats"] - AMT - FEE)])
 
+
     # Fetch the private key we need to sign with
-    priv = state["privs"][input["priv_key_index"]]
     # Sign!
-    witness = get_p2wpkh_witness(priv, msg)
+    witness = get_p2wpkh_witness(input["priv_key"], msg)
 
     # Assemble
     final = assemble_transaction([serialized_input], [output_musig, change_output], [witness])
@@ -296,6 +327,10 @@ def spend_p2wpkh(state: object) -> str:
 
 
 # state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
+
+# TODO: check length prefixes for correctness
+# check bip 134 example with get_commitment_hash !!! (maybe doesn't match due to random nbr)
+
 print(spend_p2wpkh(state))
 
 # Spend a 2-of-2 multisig p2wsh utxo and return the txid
