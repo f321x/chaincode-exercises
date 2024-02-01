@@ -8,7 +8,8 @@ from balance import (
     bcli,
     get_pub_from_priv,
     get_p2wpkh_program,
-    recover_wallet_state)
+    recover_wallet_state,
+    json)
 
 
 STATE_FILE = "state.pkl"
@@ -48,7 +49,6 @@ def get_p2wsh_program(script: bytes, version: int=0) -> bytes:
 # Given an outpoint, return a serialized transaction input spending it
 # Use hard-coded defaults for sequence and scriptSig
 def input_from_utxo(txid: bytes, index: int) -> bytes:
-    # TODO: txinwitness ??, scriptsig itself bytes?
 
     # Reverse the txid hash so it's little-endian
     reversed_txid = txid[::-1]
@@ -77,12 +77,17 @@ def get_p2wpkh_scriptcode(utxo: object) -> bytes:
     # Split the script into tokens
     tokens = asm.split(" ")
     # The last token is the pubkey hash
-    print(utxo)
-    print(tokens[-1], "tokens[-1]")
+    # print(utxo)
+    # print(tokens[-1], "tokens[-1]")
     pubkey_hash = bytes.fromhex(tokens[-1])
     # Assemble the scriptcode
     scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
     return scriptcode
+
+# If the witnessScript (the script that the P2WSH output commits to) does not contain any OP_CODESEPARATOR,
+# the scriptCode is the witnessScript serialized as scripts inside CTxOut. This is typically the case for most P2WSH transactions.
+# def get_p2wsh_scriptcode(utxo: object) -> bytes:
+#     print(utxo["scriptPubKey"]["asm"])
 
 
 # Compute the commitment hash for a single input and return bytes to sign.
@@ -208,17 +213,17 @@ def get_p2wpkh_witness(priv: bytes, msg: bytes) -> bytes:
 # as defined in BIP 141
 # Remember to add a 0x00 byte as the first witness element for CHECKMULTISIG bug
 # https://github.com/bitcoin/bips/blob/master/bip-0147.mediawiki
-def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
+def get_p2wsh_witness(privs: List[bytes], msg: bytes, orig_musig_script: bytes) -> bytes:
     # Get the compressed public keys
-    pubs = [get_pub_from_priv(priv) for priv in privs]
+    # pubs = [get_pub_from_priv(priv) for priv in privs]
     # Compute the signatures
     sigs = [sign(priv, msg) for priv in privs]
-    # Assemble the witness
-    witness = bytes.fromhex("00")
+
+    witness = bytes.fromhex("04")
+    witness += bytes.fromhex("00")
     for sig in sigs:
-        witness += sig
-    for pub in pubs:
-        witness += pub
+        witness += len(sig).to_bytes(1, "little") + sig
+    witness += len(orig_musig_script).to_bytes(1, "little") + orig_musig_script
     return witness
 
 
@@ -271,6 +276,13 @@ def get_correct_priv_key(all_privs: List[bytes], witness_prog: str) -> bytes:
         pub = get_pub_from_priv(priv)
         # print(f"witness: {get_p2wpkh_program(pub).hex()} | given: {witness_prog}")
         if witness_prog == get_p2wpkh_program(pub).hex():
+            # print("priv found")
+            return priv
+
+def get_priv_from_pubkey(all_privs: List[bytes], pubkey: str) -> bytes:
+    for priv in all_privs:
+        pub = get_pub_from_priv(priv)
+        if pubkey == pub.hex():
             # print("priv found")
             return priv
 
@@ -328,38 +340,61 @@ def spend_p2wpkh(state: object) -> str:
 
 # state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
 
-# TODO: check length prefixes for correctness
 # check bip 134 example with get_commitment_hash !!! (maybe doesn't match due to random nbr)
 
-print(spend_p2wpkh(state))
+# print(spend_p2wpkh(state)[1])
 
 # Spend a 2-of-2 multisig p2wsh utxo and return the txid
-# def spend_p2wsh(state: object, txid: str) -> str:
-#     COIN_VALUE = 1000000
-#     FEE = 1000
-#     AMT = 0
-#     # Create the input from the utxo
-#     # Reverse the txid hash so it's little-endian
+# Construct the second transaction (spend from p2wsh):
+# Repeat the previous steps but spend the p2wsh multisig output you created in the last transaction as the input to the new transaction
+# Send 0 BTC to an OP_RETURN output script which encodes your full name (or nym) in ASCII
+# Don't forget the change output and fee! You can reuse your 0th key like before.
+# Serialize the final transaction and return the hex encoded string.
+def spend_p2wsh(state: object, txid: str) -> str:
+    COIN_VALUE = 1000000
+    FEE = 1000
+    AMT = 0
+    NAME = "f321x"
+    # input_utxo = json.loads(bcli(f"decoderawtransaction {tx1_hex} true"))["vout"][0]
+    # print(input_utxo)
+    # return
 
-#     # Compute destination output script and output
+    # Create the input from the utxo
+    # Reverse the txid hash so it's little-endian
+    op, serialized_input = input_from_utxo(bytes.fromhex(txid), 0)
 
-#     # Compute change output script and output
+    # Compute destination output script and output
+    op_return_script = bytes.fromhex("6a") + len(NAME).to_bytes(1, "little") + NAME.encode("ascii")
+    output_op_return = output_from_options(op_return_script, 0)
 
-#     # Get the message to sign
+    # Compute change output script and output
+    change_script = get_p2wpkh_program(bytes.fromhex(state["pubs"][0]))
+    change_output = output_from_options(change_script, COIN_VALUE - AMT - FEE)
+    # Get the message to sign
+    input_pubkeys = [bytes.fromhex(state["pubs"][0]), bytes.fromhex(state["pubs"][1])]
+    orig_musig_script = create_multisig_script(input_pubkeys)
+    # maybe generate output?
+    msg = get_commitment_hash(op, orig_musig_script, COIN_VALUE, [output_op_return, change_output])
+    # Sign!
+    privs = [get_priv_from_pubkey(state["privs"], state["pubs"][0]), get_priv_from_pubkey(state["privs"], state["pubs"][1])]
+    witness = get_p2wsh_witness(privs, msg, orig_musig_script)
 
-#     # Sign!
 
-#     # Assemble
+    # Assemble
+    finalhex = assemble_transaction([serialized_input], [output_op_return, change_output], [witness])
 
-#     # For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
-#     return finalhex
+    # For debugging you can use RPC `testmempoolaccept ["<final hex>"]` here
+    return finalhex
 
 
 # https://mempool.btcfoss.bitherding.com/
-# if __name__ == "__main__":
-#     # Recover wallet state: We will need all key pairs and unspent coins
-#     state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
-#     txid1, tx1 = spend_p2wpkh(state)
-#     print(tx1)
-#     tx2 = spend_p2wsh(state, txid1)
-#     print(tx2)
+if __name__ == "__main__":
+    # Recover wallet state: We will need all key pairs and unspent coins
+    # state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
+    txid1, tx1 = spend_p2wpkh(state)
+    # print(tx1)
+    tx2 = spend_p2wsh(state, txid1)
+    tx2_json = json.dumps([tx2])
+    print(bcli(f"decoderawtransaction {tx2} true"))
+    print(bcli(f"testmempoolaccept {tx2_json}"))
+
