@@ -49,7 +49,6 @@ def get_p2wsh_program(script: bytes, version: int=0) -> bytes:
 # Given an outpoint, return a serialized transaction input spending it
 # Use hard-coded defaults for sequence and scriptSig
 def input_from_utxo(txid: bytes, index: int) -> bytes:
-
     # Reverse the txid hash so it's little-endian
     reversed_txid = txid[::-1]
     # Index of the output being spent (zero-indexed)
@@ -112,26 +111,25 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     result = b""
     # Version
     result += (2).to_bytes(4, "little")
-
 # https://discord.com/channels/1188115495346507797/1198656875961532416/1202045448164999258
     # printf "302e0201010420 <privkey_hex> a00706052b8104000a" | xxd -p -r > priv.hex
 # openssl ec -inform d < priv.hex > priv.pem
 # printf <hex_msg> | xxd -p -r | sha256sum | xxd -p -r | sha256sum | xxd -p -r > msg
 # openssl pkeyutl -inkey priv.pem -sign -in msg -pkeyopt digest:sha256 | xxd -p -c256
-
     # All TX input outpoints (only one in our case)
     result += dsha256(outpoint)  # hashPrevouts
     # All TX input sequences (only one for us, always default value)
     result += dsha256(bytes.fromhex("ffffffff"))
     # Single outpoint being spent (32-byte hash + 4-byte little endian)
     result += outpoint
-
     # length prefix see hint
     # Scriptcode (the scriptPubKey in/implied by the output being spent, see BIP 143) (serialized as scripts inside CTxOuts)
     # Passed scriptcode: scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
     # The scriptcode in the transaction commitment must be prefixed with a length byte, but the witness program only commits to the raw script with no length byte
-    result += scriptcode
-
+    if len(scriptcode) > 30:
+        result += len(scriptcode).to_bytes(1, "little") + scriptcode
+    else:
+        result += scriptcode
     # Value of output being spent (8-byte little endian)
     result += value.to_bytes(8, "little")
     # Sequence of output being spent (always default for us) (4-byte little endian)
@@ -142,7 +140,6 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     # with scriptPubKey (serialized as scripts inside CTxOuts)
     # https://discord.com/channels/1188115495346507797/1198656875961532416/1200194030533869659
     result += dsha256(b"".join(outputs))
-
     # Locktime (always default for us) (4-byte little endian)
     result += bytes.fromhex("00000000")
     # SIGHASH_ALL (always default for us) (4-byte little endian)
@@ -213,17 +210,26 @@ def get_p2wpkh_witness(priv: bytes, msg: bytes) -> bytes:
 # as defined in BIP 141
 # Remember to add a 0x00 byte as the first witness element for CHECKMULTISIG bug
 # https://github.com/bitcoin/bips/blob/master/bip-0147.mediawiki
-def get_p2wsh_witness(privs: List[bytes], msg: bytes, orig_musig_script: bytes) -> bytes:
-    # Get the compressed public keys
-    # pubs = [get_pub_from_priv(priv) for priv in privs]
-    # Compute the signatures
+# orig_musig_script == OP_2 <pubkey1> <pubkey2> OP_2 OP_CHECKMULTISIG
+# msg == commitment hash
+def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
     sigs = [sign(priv, msg) for priv in privs]
-
     witness = bytes.fromhex("04")
     witness += bytes.fromhex("00")
     for sig in sigs:
         witness += len(sig).to_bytes(1, "little") + sig
-    witness += len(orig_musig_script).to_bytes(1, "little") + orig_musig_script
+    musig_script = b""
+    op2 = bytes.fromhex("52")
+    op_checkmultisig = bytes.fromhex("ae")
+    musig_script += op2
+    for key in privs:
+        key = get_pub_from_priv(key)
+        musig_script += bytes.fromhex("21")  # 33 bytes
+        musig_script += key
+    musig_script += op2
+    musig_script += op_checkmultisig
+    musig_script = len(musig_script).to_bytes(1, "little") + musig_script
+    witness += musig_script
     return witness
 
 
@@ -370,15 +376,20 @@ def spend_p2wsh(state: object, txid: str) -> str:
     # Compute change output script and output
     change_script = get_p2wpkh_program(bytes.fromhex(state["pubs"][0]))
     change_output = output_from_options(change_script, COIN_VALUE - AMT - FEE)
+
     # Get the message to sign
     input_pubkeys = [bytes.fromhex(state["pubs"][0]), bytes.fromhex(state["pubs"][1])]
     orig_musig_script = create_multisig_script(input_pubkeys)
+
     # maybe generate output?
+    # print("orig musig script", orig_musig_script.hex())
     msg = get_commitment_hash(op, orig_musig_script, COIN_VALUE, [output_op_return, change_output])
+
     # Sign!
     privs = [get_priv_from_pubkey(state["privs"], state["pubs"][0]), get_priv_from_pubkey(state["privs"], state["pubs"][1])]
-    witness = get_p2wsh_witness(privs, msg, orig_musig_script)
-
+    # print("privs", privs[0].hex(), privs[1].hex())
+    witness = get_p2wsh_witness(privs, msg)
+    # print(witness.hex())
 
     # Assemble
     finalhex = assemble_transaction([serialized_input], [output_op_return, change_output], [witness])
@@ -392,9 +403,20 @@ if __name__ == "__main__":
     # Recover wallet state: We will need all key pairs and unspent coins
     # state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
     txid1, tx1 = spend_p2wpkh(state)
-    # print(tx1)
+    # print("txid1 ", txid1)
+    # print("tx1 ", tx1)
     tx2 = spend_p2wsh(state, txid1)
     tx2_json = json.dumps([tx2])
     print(bcli(f"decoderawtransaction {tx2} true"))
     print(bcli(f"testmempoolaccept {tx2_json}"))
+    print(tx2)
+
+
+
+# op1, serialized_input1 = input_from_utxo(bytes.fromhex("fe3dc9208094f3ffd12645477b3dc56f60ec4fa8e6f5d67c565d1c6b9216b36e"), 0)
+# op2, serialized_input2 = input_from_utxo(bytes.fromhex("0815cf020f013ed6cf91d29f4202e8a58726b1ac6c79da47c23d1bee0a6925f8"), 0)
+
+# scriptcode = bytes.fromhex("4721026dccc749adc2a9d0d89497ac511f760f45c47dc5ed9cf352a58ac706453880aeadab210255a9626aebf5e29c0e6538428ba0d1dcf6ca98ffdf086aa8ced5e0d0215ea465ac")
+
+
 
