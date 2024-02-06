@@ -1,15 +1,26 @@
 def parse_mempool_csv():
     """Parse the CSV file and return a list of MempoolTransactions."""
     mempool = {}
-    with open('mempool.csv') as f:
-        for line in f.readlines():
-            line_elements = line.strip().split(',')
-            tx = {
-                "fee": int(line_elements[1]),
-                "weight": int(line_elements[2]),
-                "parents": line_elements[3].split(';') if line_elements[3] else None
-            }
-            mempool[line_elements[0]] = tx
+    try:
+        with open('../../mempool.csv') as f:
+            for line in f.readlines():
+                line_elements = line.strip().split(',')
+                tx = {
+                    "fee": int(line_elements[1]),
+                    "weight": int(line_elements[2]),
+                    "parents": line_elements[3].split(';') if line_elements[3] else None
+                }
+                mempool[line_elements[0]] = tx
+    except:
+        with open('mempool.csv') as f:
+            for line in f.readlines():
+                line_elements = line.strip().split(',')
+                tx = {
+                    "fee": int(line_elements[1]),
+                    "weight": int(line_elements[2]),
+                    "parents": line_elements[3].split(';') if line_elements[3] else None
+                }
+                mempool[line_elements[0]] = tx
     return mempool
 
 
