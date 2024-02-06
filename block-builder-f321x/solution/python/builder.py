@@ -54,7 +54,7 @@ def get_block_size(block):
 
 def add_parents_to_block(block, mempool, child):
     if child not in mempool:
-        return block, mempool
+        return
     if not mempool[child]["parents"]:
         block[child] = mempool[child]
         del mempool[child]
@@ -67,7 +67,7 @@ def add_parents_to_block(block, mempool, child):
 
 def build_block(mempool):
     block = {}
-    while (get_block_size(block) < 4000000):
+    while get_block_size(block) < 4000000 and mempool:
         add_parents_to_block(block, mempool, list(mempool.keys())[0])
         mempool = dict(sorted(mempool.items(), key=lambda item: item[1]["packet_feerate"], reverse=True))
     while (get_block_size(block) > 4000000):
