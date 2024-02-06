@@ -88,8 +88,7 @@ def build_block(mempool):
 def write_block_to_file(block, filename):
     with open(filename, 'w') as f:
         for txid, tx in block.items():
-            parent_txids = '' if tx['parents'] is None else ';'.join(tx['parents'])
-            f.write(f"{txid},{tx['fee']},{tx['weight']},{parent_txids}\n")
+            f.write(f"{txid}\n")
 
 def run_checks(block):
     if get_block_size(block) > 4000000:
