@@ -1,0 +1,44 @@
+{
+  "tests": [
+    {
+      "name": "000 - Setup LNCLI",
+      "setup": "",
+      "run": "./test/download_lnd.sh",
+      "input": "",
+      "output": "",
+      "comparison": "exact",
+      "timeout": 10,
+      "points": 1
+    },
+    {
+      "name": "001 - Preimage Check",
+      "setup": "",
+      "run": "./test/001-check_preimage.sh",
+      "input": "",
+      "output": "PASS",
+      "comparison": "regex",
+      "timeout": 10,
+      "points": 1
+    },
+    {
+      "name": "002 - Gossip Lookup",
+      "setup": "",
+      "run": "./submissions/002.sh",
+      "input": "",
+      "output": "15000",
+      "comparison": "exact",
+      "timeout": 10,
+      "points": 1
+    },
+    {
+      "name": "003 - Route Check",
+      "setup": "",
+      "run": "./test/003-check_forward.sh ",
+      "input": "",
+      "output": "PASS",
+      "comparison": "regex",
+      "timeout": 10,
+      "points": 1
+    }
+  ]
+}
