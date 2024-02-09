@@ -1,0 +1,11 @@
+lncli -n "signet" buildroute --hops "0325ecd6d2d8739681e2f7644f4221ed942b76d6b7825d4e730671ad17fb0d50e5,0324b10f41493935f35cd3b4c1131c94e8f83bfe66c6ebf842790e59e182076d30" --outgoing_chan_id "6131976348237825"
+
+
+# Build the route
+route=$(lncli -n "signet" buildroute --hops "0325ecd6d2d8739681e2f7644f4221ed942b76d6b7825d4e730671ad17fb0d50e5,0324b10f41493935f35cd3b4c1131c94e8f83bfe66c6ebf842790e59e182076d30" --outgoing_chan_id "6131976348237825")
+
+# Extract the payment hash from the invoice
+payment_hash=$(lncli decodepayreq --pay_req "your_invoice_here" | jq -r '.payment_hash')
+
+# Send the payment over the route
+lncli -n "signet" sendtoroute --payment_hash=$payment_hash --routes=$route
