@@ -1,0 +1,24 @@
+{
+  "tests": [
+    {
+      "name": "Build Santity Check",
+      "setup": "",
+      "run": "./test/check_run.sh",
+      "input": "",
+      "output": "BUILD CHECK PASSED",
+      "comparison": "included",
+      "timeout": 10,
+      "points": null
+    },
+    {
+      "name": "Final Submission",
+      "setup": "",
+      "run": "./submissions/done.sh",
+      "input": "",
+      "output": "DONE",
+      "comparison": "regex",
+      "timeout": 10,
+      "points": null
+    }
+  ]
+}
