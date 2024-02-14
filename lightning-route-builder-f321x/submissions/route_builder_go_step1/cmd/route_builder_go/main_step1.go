@@ -60,15 +60,33 @@ func checkError(err error) {
 // Expected stdout (example):
 // 0,AliceBob,amount,expiry,NULL
 
-func calc_fee_for_hop(current_route Route, curr_amt_msat uint64) uint64 {
+func calc_fee_for_hop(current_route Route, val_msat uint64) uint64 {
+	var fee_msat uint64
 
+	fee_msat += current_route.base_fee_msat
+	fee_msat += (val_msat * current_route.proportional_fee_ppm) / 1000000
+	return fee_msat
 }
 
-func calc_routes(bolt11 decodepay.Bolt11, routes []Route, block_height string) []string {
+func calc_routes(bolt11 decodepay.Bolt11, routes []Route, block_height uint32) []string {
 	var result []string
-	var all_cltv int
 	var all_fees uint64
 
+	for index, channel := range routes {
+		if index > 0 {
+			all_fees += calc_fee_for_hop(channel, uint64(bolt11.MSatoshi))
+		}
+	}
+	for index, channel := range routes {
+		block_height += channel.cltv_delta
+		if index > 0 {
+			all_fees -= calc_fee_for_hop(channel, uint64(bolt11.MSatoshi))
+		}
+		current_htlc := fmt.Sprintf("0,%s,%d,%d,NULL", channel.channel_name,
+			all_fees+uint64(bolt11.MSatoshi), block_height)
+		result = append(result, current_htlc)
+	}
+	return result
 }
 
 func main() {
@@ -90,8 +108,12 @@ func main() {
 
 	bolt11, error := decodepay.Decodepay(args[1])
 	checkError(error)
-
-	result_strings := calc_routes(bolt11, routes, args[2])
+	block_height, err := strconv.ParseUint(args[2], 10, 32)
+	checkError(err)
+	result_strings := calc_routes(bolt11, routes, uint32(block_height))
+	for _, hop := range result_strings {
+		fmt.Println(hop)
+	}
 }
 
 // Bolt11{
