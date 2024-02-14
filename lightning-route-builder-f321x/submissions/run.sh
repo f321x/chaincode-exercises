@@ -11,7 +11,7 @@ payment_request_hex="$2"
 current_block_height="$3"
 
 # Please fill in the version of the programming language you used here to help us with debugging if we run into problems!
-# version="{PLEASE FILL YOUR VERSION HERE}"
+version="GO 1.21.5"
 
 # Check if the 'version' variable is not null
 if [ -z "$version" ]; then
@@ -20,3 +20,4 @@ if [ -z "$version" ]; then
 fi
 
 # Your run command here:
+./route_builder_go_step3/main_step3 $input_file_path $payment_request_hex $current_block_height
