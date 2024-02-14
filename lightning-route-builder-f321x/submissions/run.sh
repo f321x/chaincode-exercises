@@ -20,4 +20,5 @@ if [ -z "$version" ]; then
 fi
 
 # Your run command here:
-./route_builder_go_step3/main_step3 $input_file_path $payment_request_hex $current_block_height
+cd route_builder_go_step3
+go run main_step3.go $input_file_path $payment_request_hex $current_block_height
