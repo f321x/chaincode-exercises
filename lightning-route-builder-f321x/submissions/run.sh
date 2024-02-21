@@ -20,5 +20,7 @@ if [ -z "$version" ]; then
 fi
 
 # Your run command here:
-cd route_builder_go_step3
-go run main_step3.go $input_file_path $payment_request_hex $current_block_height
+
+(cd solution && go run solution.go $input_file_path $payment_request_hex $current_block_height)
+
+# /workspaces/chaincode-exercises/lightning-route-builder-f321x/test/input.csv 'lnbcrt2m1pju8yyypp5fw792f22sn3fkf7v6s9ts8qqp4pctwrxh2lngsjjd04meyqrqt6sdqqcqzpgxqyz5vqsp5hlfxjuve42lf8ha2unuhta2e3uxr9v37yvr72w7gwm3tllqj56ps9qyyssqjuu0dyg9eny69pcf5nfzax97sx8ewg2dhp05ucr3l3j9dqc7xcw8js7zhw0wz3yg55j8ykkw8hrpv7zvgkwuckhr6q3vsva5y8flf9cqatkpp3' 1000
