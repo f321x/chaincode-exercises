@@ -360,7 +360,7 @@ def spend_p2wsh(state: object, txid: str) -> str:
     COIN_VALUE = 1000000
     FEE = 1000
     AMT = 0
-    NAME = "f321x"
+    NAME = "Salokiam"  # change to mine again
     # input_utxo = json.loads(bcli(f"decoderawtransaction {tx1_hex} true"))["vout"][0]
     # print(input_utxo)
     # return
@@ -408,8 +408,8 @@ if __name__ == "__main__":
     tx2 = spend_p2wsh(state, txid1)
     tx2_json = json.dumps([tx2])
     print(bcli(f"decoderawtransaction {tx2} true"))
-    print(bcli(f"testmempoolaccept {tx2_json}"))
-    print(tx2)
+    # print(bcli(f"testmempoolaccept {tx2_json}"))
+    # print(tx2)
 
 
 
