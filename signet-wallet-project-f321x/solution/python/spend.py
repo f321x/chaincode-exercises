@@ -59,7 +59,7 @@ def input_from_utxo(txid: bytes, index: int) -> bytes:
     # Sequence (default)
     sequence = bytes.fromhex("ffffffff")
     # Return the full input
-    return outpoint, reversed_txid + index + scriptsig_len + sequence
+    return outpoint, outpoint + scriptsig_len + sequence
 
 # Given an output script and value (in satoshis), return a serialized transaction output
 def output_from_options(script: bytes, value: int) -> bytes:
@@ -126,10 +126,12 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     # Scriptcode (the scriptPubKey in/implied by the output being spent, see BIP 143) (serialized as scripts inside CTxOuts)
     # Passed scriptcode: scriptcode = bytes.fromhex("1976a914") + pubkey_hash + bytes.fromhex("88ac")
     # The scriptcode in the transaction commitment must be prefixed with a length byte, but the witness program only commits to the raw script with no length byte
+
     if len(scriptcode) > 30:
         result += len(scriptcode).to_bytes(1, "little") + scriptcode
     else:
         result += scriptcode
+
     # Value of output being spent (8-byte little endian)
     result += value.to_bytes(8, "little")
     # Sequence of output being spent (always default for us) (4-byte little endian)
@@ -144,6 +146,7 @@ def get_commitment_hash(outpoint: bytes, scriptcode: bytes, value: int, outputs:
     result += bytes.fromhex("00000000")
     # SIGHASH_ALL (always default for us) (4-byte little endian)
     result += bytes.fromhex("01000000")
+    # print(result.hex())
     return dsha256(result)
 
 # Given a JSON utxo object and a list of all of our wallet's witness programs,
@@ -214,10 +217,12 @@ def get_p2wpkh_witness(priv: bytes, msg: bytes) -> bytes:
 # msg == commitment hash
 def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
     sigs = [sign(priv, msg) for priv in privs]
-    witness = bytes.fromhex("04")
+    witness = bytes.fromhex("04")  # init length, correct ?
     witness += bytes.fromhex("00")
     for sig in sigs:
         witness += len(sig).to_bytes(1, "little") + sig
+
+    # check
     musig_script = b""
     op2 = bytes.fromhex("52")
     op_checkmultisig = bytes.fromhex("ae")
@@ -229,6 +234,7 @@ def get_p2wsh_witness(privs: List[bytes], msg: bytes) -> bytes:
     musig_script += op2
     musig_script += op_checkmultisig
     musig_script = len(musig_script).to_bytes(1, "little") + musig_script
+    # print('len musig script: ', len(musig_script))
     witness += musig_script
     return witness
 
@@ -252,8 +258,6 @@ def assemble_transaction(inputs: List[bytes], outputs: List[bytes], witnesses: L
     for output in outputs:
         tx += output
 
-    # for witness in witnesses: this cost me two days :D
-    #     tx += witness
     for witness in witnesses:
         tx += witness
 
@@ -298,10 +302,10 @@ def spend_p2wpkh(state: object) -> str:
     AMT = 1000000
     input = {}
     index = 0
-    # Choose an unspent coin worth more than 0.01 BTC
 
+    # Choose an unspent coin worth more than 0.01 BTC
     for txid, utxo in state["utxo"].items():
-        if utxo[1] > AMT + FEE:
+        if utxo[1] > AMT + FEE and utxo[1] > 9090283:
             input['txid'] = txid  # txid
             input['op_index'] = utxo[0]  # outpoint index
             input['value_sats'] = utxo[1]  # value in satoshis
@@ -319,8 +323,12 @@ def spend_p2wpkh(state: object) -> str:
 
     # Compute destination output script and output
     pubkeys = [bytes.fromhex(state["pubs"][0]), bytes.fromhex(state["pubs"][1])]
+    # print("Pubkeys spent to in P2wpkh: ", pubkeys[0].hex(), " and ", pubkeys[1].hex())
     musig_script = create_multisig_script(pubkeys)
-    output_musig = output_from_options(musig_script, AMT)
+    sha256_hash = hashlib.sha256(musig_script).digest()
+    scriptPubKey = bytes.fromhex("0020") + sha256_hash
+
+    output_musig = output_from_options(scriptPubKey, AMT)
 
     # Compute change output script and output
     change_script = get_p2wpkh_program(bytes.fromhex(state["pubs"][0]))
@@ -328,8 +336,9 @@ def spend_p2wpkh(state: object) -> str:
 
     # Get the message to sign
     scriptcode = get_p2wpkh_scriptcode(input["utxo_obj"])
+    # print(input["txid"])
+    # print(input["op_index"])
     msg = get_commitment_hash(op, scriptcode, input["value_sats"], [output_musig, output_from_options(change_script, input["value_sats"] - AMT - FEE)])
-
 
     # Fetch the private key we need to sign with
     # Sign!
@@ -360,7 +369,7 @@ def spend_p2wsh(state: object, txid: str) -> str:
     COIN_VALUE = 1000000
     FEE = 1000
     AMT = 0
-    NAME = "Salokiam"  # change to mine again
+    NAME = "f321x"
     # input_utxo = json.loads(bcli(f"decoderawtransaction {tx1_hex} true"))["vout"][0]
     # print(input_utxo)
     # return
@@ -370,15 +379,19 @@ def spend_p2wsh(state: object, txid: str) -> str:
     op, serialized_input = input_from_utxo(bytes.fromhex(txid), 0)
 
     # Compute destination output script and output
+    # change name to different and compare witness
+    # check length of name
     op_return_script = bytes.fromhex("6a") + len(NAME).to_bytes(1, "little") + NAME.encode("ascii")
     output_op_return = output_from_options(op_return_script, 0)
 
     # Compute change output script and output
+    # print(state["pubs"][0])
     change_script = get_p2wpkh_program(bytes.fromhex(state["pubs"][0]))
     change_output = output_from_options(change_script, COIN_VALUE - AMT - FEE)
 
     # Get the message to sign
     input_pubkeys = [bytes.fromhex(state["pubs"][0]), bytes.fromhex(state["pubs"][1])]
+    # print("Input pubkeys: ", input_pubkeys[0].hex(), " and ", input_pubkeys[1].hex())
     orig_musig_script = create_multisig_script(input_pubkeys)
 
     # maybe generate output?
@@ -404,12 +417,14 @@ if __name__ == "__main__":
     # state = recover_wallet_state(EXTENDED_PRIVATE_KEY)
     txid1, tx1 = spend_p2wpkh(state)
     # print("txid1 ", txid1)
-    # print("tx1 ", tx1)
+    print(tx1)
+    # tx1_json = json.dumps([tx1])
+    # print(bcli(f"testmempoolaccept {tx1_json}"))
     tx2 = spend_p2wsh(state, txid1)
     tx2_json = json.dumps([tx2])
-    print(bcli(f"decoderawtransaction {tx2} true"))
+    # print(bcli(f"decoderawtransaction {tx2} true"))
     # print(bcli(f"testmempoolaccept {tx2_json}"))
-    # print(tx2)
+    print(tx2)
 
 
 
